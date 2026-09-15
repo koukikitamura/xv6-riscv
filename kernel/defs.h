@@ -9,6 +9,9 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+struct sock;
+struct eth_hdr;
+struct ip_hdr;
 
 // bio.c
 void            binit(void);
@@ -181,6 +184,30 @@ void            plic_complete(int);
 void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
 void            virtio_disk_intr(void);
+
+// virtio_net.c
+void            virtio_net_init(void);
+void            virtio_net_send(char*, int);
+void            virtio_net_intr(void);
+
+// net.c
+void            netinit(void);
+void            net_rx(char*, int);
+void            net_tx(uint8*, uint32, uint8, char*, int);
+uint32          net_csum_add(uint32, void*, int);
+uint16          net_csum_fold(uint32);
+
+// tcp.c
+void            tcp_rx(struct eth_hdr*, struct ip_hdr*, int);
+struct sock*    socklisten(int);
+struct sock*    sockaccept(struct sock*);
+int             sockread(struct sock*, uint64, int);
+int             sockwrite(struct sock*, uint64, int);
+void            sockclose(struct sock*);
+
+// sysnet.c
+uint64          sys_listen(void);
+uint64          sys_accept(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x) / sizeof((x)[0]))

@@ -25,6 +25,10 @@
 #define VIRTIO0     0x10001000
 #define VIRTIO0_IRQ 1
 
+// virtio mmio interface for the network device
+#define VIRTIO1     0x10002000
+#define VIRTIO1_IRQ 2
+
 // core-local interrupt controller (CLINT)
 #define CLINT_BASE  0x02000000L
 #define CLINT(hart) (CLINT_BASE + (hart) * 4)

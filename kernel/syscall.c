@@ -130,6 +130,8 @@ static uint64 (*syscalls[])(void) = {
   [SYS_mkdir]   = sys_mkdir,
   [SYS_close]   = sys_close,
   [SYS_sync]    = sys_sync,
+  [SYS_listen]  = sys_listen,
+  [SYS_accept]  = sys_accept,
   // clang-format on
 };
 

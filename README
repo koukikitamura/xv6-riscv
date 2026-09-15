@@ -46,3 +46,21 @@ You will need a RISC-V "newlib" tool chain from
 https://github.com/riscv/riscv-gnu-toolchain, and qemu compiled for
 riscv64-softmmu.  Once they are installed, and in your shell
 search path, you can run "make qemu".
+
+NETWORKING
+
+This fork adds a virtio-net driver and a small TCP/IP stack
+(kernel/virtio_net.c, net.c, tcp.c, sysnet.c), and a web server
+(user/httpd.c).  "make qemu" attaches qemu's user-mode network and
+forwards host port 8080 to port 80 in xv6 (change the host port with
+"make qemu NETPORT=8081").  In the xv6 shell run
+
+  $ httpd &
+
+and open http://localhost:8080/ on the host.  "/" is user/index.html;
+other paths are files on the xv6 file system, e.g. /README.
+
+The stack is server-side TCP only, with no retransmission, and is
+meant to stay small and readable rather than complete.  Set NET_DEBUG
+to 1 in kernel/net.h to log every frame.  "./test-xv6.py net"
+exercises it from the host.

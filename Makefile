@@ -28,7 +28,11 @@ OBJS = \
   $K/sysfile.o \
   $K/kernelvec.o \
   $K/plic.o \
-  $K/virtio_disk.o
+  $K/virtio_disk.o \
+  $K/virtio_net.o \
+  $K/net.o \
+  $K/tcp.o \
+  $K/sysnet.o
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
 # perhaps in /opt/riscv/bin
@@ -150,9 +154,10 @@ UPROGS=\
 	$U/_forphan\
 	$U/_dorphan\
 	$U/_sync\
+	$U/_httpd\
 
-fs.img: mkfs/mkfs README $(UPROGS)
-	mkfs/mkfs fs.img README $(UPROGS)
+fs.img: mkfs/mkfs README $U/index.html $(UPROGS)
+	mkfs/mkfs fs.img README $U/index.html $(UPROGS)
 
 -include kernel/*.d user/*.d
 
@@ -178,6 +183,13 @@ QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nogr
 QEMUOPTS += -global virtio-mmio.force-legacy=false
 QEMUOPTS += -drive file=fs.img,if=none,format=raw,id=x0
 QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
+# network: qemu's user-mode stack; host port $(NETPORT) forwards to guest port 80.
+# add -object filter-dump,id=dump0,netdev=net0,file=net.pcap to capture packets.
+ifndef NETPORT
+NETPORT := 8080
+endif
+QEMUOPTS += -netdev user,id=net0,hostfwd=tcp::$(NETPORT)-:80
+QEMUOPTS += -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.1
 
 qemu: check-qemu-version $K/kernel fs.img
 	$(QEMU) $(QEMUOPTS)

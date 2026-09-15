@@ -7,8 +7,11 @@
 # ./test-xv6.py -q usertests (runs the quick tests of usertests)
 # ./test-xv6.py crash  (runs the crash tests)
 # ./test-xv6.py log (runs the log crash test)
+# ./test-xv6.py net (starts httpd in xv6 and fetches pages from the host;
+#                    NETPORT=8081 ./test-xv6.py net to use another host port)
 
-import argparse, os, inspect, re, signal, subprocess, sys, time
+import argparse, os, inspect, re, signal, socket, subprocess, sys, time
+import urllib.request, urllib.error
 from subprocess import run
 
 sys.stdout.reconfigure(line_buffering=True)
@@ -193,6 +196,70 @@ def test_crash():
     test_log()
     test_forphan()
     test_dorphan()
+
+def http_get(path, timeout=10):
+    port = os.environ.get("NETPORT", "8080")
+    try:
+        with urllib.request.urlopen("http://localhost:%s%s" % (port, path), timeout=timeout) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+def test_net():
+    print("Test network: httpd reachable from the host")
+    port = int(os.environ.get("NETPORT", "8080"))
+    readme = open("README", "rb").read()
+    q = QEMU(True)
+    q.monitor('^init: starting sh', timeout=30)
+
+    def fail(msg):
+        print("FAIL:", msg)
+        q.save_output()
+        q.stop()
+        sys.exit(1)
+
+    def check(path, status, body=None):
+        st, got = http_get(path)
+        if st != status:
+            fail("GET %s: status %d, expected %d" % (path, st, status))
+        if body is not None and got != body:
+            fail("GET %s: wrong body (%d bytes, expected %d)" % (path, len(got), len(body)))
+        print("GET %s: %d" % (path, st))
+
+    # nothing listens yet: the connection must be reset at once, not hang.
+    t0 = time.time()
+    try:
+        http_get("/", timeout=8)
+        fail("connected although nothing is listening")
+    except (urllib.error.URLError, OSError):
+        pass
+    if time.time() - t0 > 3:
+        fail("connection to a closed port took too long")
+    print("closed port: reset")
+
+    # build a file bigger than the peer's TCP window (40 x README), then
+    # start the server. sh runs these in order.
+    q.cmd("cat README README README README README README README README > big\n")
+    q.cmd("cat big big big big big > big2\n")
+    q.cmd("httpd &\n")
+    q.monitor(r'.*httpd: listening', timeout=30)
+
+    check("/", 200)
+    check("/README", 200, readme)
+    check("/nope", 404)
+    check("/big2", 200, readme * 40)
+
+    # a connection that never sends a request (browsers open spare ones)
+    # must not block other connections.
+    idle = socket.create_connection(("localhost", port))
+    check("/", 200)
+    idle.close()
+
+    for i in range(20):
+        check("/README", 200, readme)
+
+    print("OK")
+    q.stop()
 
 def test_usertests(test=""):
     timeout = 600

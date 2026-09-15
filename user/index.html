@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xv6</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { box-sizing: border-box; }
+  body {
+    background: #07090c;
+    color: #c9d1d9;
+    font: 16px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+    background-image:
+      radial-gradient(900px 500px at 50% 45%, rgba(94, 242, 138, .10), transparent 70%),
+      linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+    background-size: auto, 48px 48px, 48px 48px;
+  }
+  main { text-align: center; }
+  h1 {
+    margin: 0;
+    font-size: clamp(96px, 22vw, 220px);
+    line-height: 1;
+    font-weight: 800;
+    letter-spacing: -.06em;
+    color: #5ef28a;
+    text-shadow: 0 0 40px rgba(94, 242, 138, .35);
+  }
+  p { margin: 20px 0 0; color: #8b96a2; }
+  p b { color: #e6edf3; font-weight: normal; }
+  a { color: #6ad4ff; text-decoration: none; border-bottom: 1px solid rgba(106, 212, 255, .4); }
+  a:hover { color: #fff; border-color: #fff; }
+</style>
+</head>
+<body>
+<main>
+  <h1>xv6</h1>
+  <p>this page was served from <b>xv6</b> running inside qemu.<br>
+  any file on the xv6 disk can be fetched by path, for example <a href="/README">/README</a>.</p>
+</main>
+</body>
+</html>

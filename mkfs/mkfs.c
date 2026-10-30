@@ -10,6 +10,7 @@
 #include "kernel/fs.h"
 #include "kernel/stat.h"
 #include "kernel/param.h"
+#include "user/accounts.h"
 
 #ifndef static_assert
 #define static_assert(a, b)                                                    \
@@ -45,6 +46,8 @@ void rsect(uint sec, void *buf);
 uint ialloc(ushort type);
 void iappend(uint inum, void *p, int n);
 void die(const char *);
+void addentry(uint, const char *, uint);
+void homes(uint);
 
 // convert to riscv byte order
 ushort
@@ -85,6 +88,9 @@ main(int argc, char *argv[])
     exit(1);
   }
 
+  static_assert(sizeof(struct account) == 40, "account layout");
+  static_assert(sizeof(struct credential) == 56, "credential layout");
+  static_assert(sizeof(struct group) == 20, "group layout");
   assert((BSIZE % sizeof(struct dinode)) == 0);
   assert((BSIZE % sizeof(struct dirent)) == 0);
 
@@ -136,6 +142,8 @@ main(int argc, char *argv[])
     char *shortname;
     if (strncmp(argv[i], "user/", 5) == 0)
       shortname = argv[i] + 5;
+    else if (strncmp(argv[i], "lab/", 4) == 0)
+      shortname = argv[i] + 4;
     else
       shortname = argv[i];
 
@@ -143,6 +151,8 @@ main(int argc, char *argv[])
 
     if ((fd = open(argv[i], 0)) < 0)
       die(argv[i]);
+
+    int executable = shortname[0] == '_';
 
     // Skip leading _ in name when writing to file system.
     // The binaries are named _rm, _cat, etc. to keep the
@@ -154,6 +164,11 @@ main(int argc, char *argv[])
     assert(strlen(shortname) <= DIRSIZ);
 
     inum = ialloc(T_FILE);
+    rinode(inum, &din);
+    din.mode = xint(executable                         ? 0755
+                    : strcmp(shortname, "shadow") == 0 ? 0600
+                                                       : 0644);
+    winode(inum, &din);
 
     bzero(&de, sizeof(de));
     de.inum = xshort(inum);
@@ -165,6 +180,8 @@ main(int argc, char *argv[])
 
     close(fd);
   }
+
+  homes(rootino);
 
   // fix size of root inode dir
   rinode(rootino, &din);
@@ -231,6 +248,7 @@ ialloc(ushort type)
 
   bzero(&din, sizeof(din));
   din.type = xshort(type);
+  din.mode = xint(type == T_DIR ? 0755 : 0644);
   din.nlink = xshort(1);
   din.size = xint(0);
   winode(inum, &din);
@@ -304,4 +322,63 @@ die(const char *s)
 {
   perror(s);
   exit(1);
+}
+
+// The lab account database is fixed-width little-endian, just like dinode.
+void
+addentry(uint dir, const char *name, uint inum)
+{
+  struct dirent de = {0};
+  de.inum = xshort(inum);
+  assert(strlen(name) <= DIRSIZ);
+  strncpy(de.name, name, DIRSIZ);
+  iappend(dir, &de, sizeof(de));
+}
+
+void
+homes(uint root)
+{
+  struct account account;
+  struct dinode din;
+
+  int fd = open("lab/passwd", O_RDONLY);
+  if (fd < 0)
+    die("lab/passwd");
+
+  while (read(fd, &account, sizeof(account)) == sizeof(account)) {
+    if (strcmp(account.home, "/") == 0)
+      continue;
+
+    uint home = ialloc(T_DIR);
+    addentry(home, ".", home);
+    addentry(home, "..", root);
+    addentry(root, account.home + 1, home);
+
+    rinode(home, &din);
+    din.uid = account.uid;
+    din.gid = account.gid;
+    din.mode = xint(0755);
+    winode(home, &din);
+
+    rinode(root, &din);
+    din.nlink = xshort(xshort(din.nlink) + 1);
+    winode(root, &din);
+
+    if (strcmp(account.name, "alice") == 0) {
+      uint memo = ialloc(T_FILE);
+      char text[] = "Alice's private memo.\n";
+
+      iappend(memo, text, sizeof(text) - 1);
+
+      rinode(memo, &din);
+      din.uid = account.uid;
+      din.gid = account.gid;
+      din.mode = xint(0600);
+      winode(memo, &din);
+
+      addentry(home, "memo.txt", memo);
+    }
+  }
+
+  close(fd);
 }

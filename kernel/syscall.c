@@ -104,6 +104,20 @@ extern uint64 sys_mkdir(void);
 extern uint64 sys_close(void);
 extern uint64 sys_sync(void);
 
+extern uint64 sys_getuid(void);
+
+extern uint64 sys_getgid(void);
+
+extern uint64 sys_setidentity(void);
+
+extern uint64 sys_chmod(void);
+
+extern uint64 sys_chown(void);
+
+extern uint64 sys_stat(void);
+
+extern uint64 sys_consoleset(void);
+
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
 static uint64 (*syscalls[])(void) = {
@@ -130,6 +144,13 @@ static uint64 (*syscalls[])(void) = {
   [SYS_mkdir]   sys_mkdir,
   [SYS_close]   sys_close,
   [SYS_sync]    sys_sync,
+  [SYS_getuid] sys_getuid,
+  [SYS_getgid] sys_getgid,
+  [SYS_setidentity] sys_setidentity,
+  [SYS_chmod] sys_chmod,
+  [SYS_chown] sys_chown,
+  [SYS_stat] sys_stat,
+  [SYS_consoleset] sys_consoleset,
   // clang-format on
 };
 

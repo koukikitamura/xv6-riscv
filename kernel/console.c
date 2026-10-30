@@ -53,6 +53,8 @@ struct {
   uint r; // Read index
   uint w; // Write index
   uint e; // Edit index
+  int echo;
+  uint uid;
 } cons;
 
 //
@@ -94,16 +96,26 @@ consoleread(int user_dst, uint64 dst, int n)
   target = n;
   acquire(&cons.lock);
   while (n > 0) {
+    if (myproc()->uid != 0 && myproc()->uid != cons.uid) {
+      release(&cons.lock);
+      return -1;
+    }
     // wait until interrupt handler has put some
     // input into cons.buffer.
     while (cons.r == cons.w) {
-      if (killed(myproc())) {
+      if (killed(myproc()) ||
+          (myproc()->uid != 0 && myproc()->uid != cons.uid)) {
         release(&cons.lock);
         return -1;
       }
       sleep(&cons.r, &cons.lock);
     }
 
+    // Recheck after sleep even if input arrived with the ownership change.
+    if (myproc()->uid != 0 && myproc()->uid != cons.uid) {
+      release(&cons.lock);
+      return -1;
+    }
     c = cons.buf[cons.r++ % INPUT_BUF_SIZE];
 
     if (c == C('D')) { // end-of-file
@@ -153,14 +165,16 @@ consoleintr(int c)
     while (cons.e != cons.w &&
            cons.buf[(cons.e - 1) % INPUT_BUF_SIZE] != '\n') {
       cons.e--;
-      consputc(BACKSPACE);
+      if (cons.echo)
+        consputc(BACKSPACE);
     }
     break;
   case C('H'): // Backspace
   case '\x7f': // Delete key
     if (cons.e != cons.w) {
       cons.e--;
-      consputc(BACKSPACE);
+      if (cons.echo)
+        consputc(BACKSPACE);
     }
     break;
   default:
@@ -168,7 +182,8 @@ consoleintr(int c)
       c = (c == '\r') ? '\n' : c;
 
       // echo back to the user.
-      consputc(c);
+      if (cons.echo)
+        consputc(c);
 
       // store for consumption by consoleread().
       cons.buf[cons.e++ % INPUT_BUF_SIZE] = c;
@@ -190,6 +205,7 @@ void
 consoleinit(void)
 {
   initlock(&cons.lock, "cons");
+  cons.echo = 1;
 
   uartinit();
 
@@ -197,4 +213,17 @@ consoleinit(void)
   // to consoleread and consolewrite.
   devsw[CONSOLE].read = consoleread;
   devsw[CONSOLE].write = consolewrite;
+}
+
+int
+consoleset(int uid, int echo)
+{
+  acquire(&cons.lock);
+  cons.uid = uid;
+  cons.echo = echo;
+  // Discard pending input at authentication/session boundaries.
+  cons.r = cons.w = cons.e;
+  wakeup(&cons.r);
+  release(&cons.lock);
+  return 0;
 }

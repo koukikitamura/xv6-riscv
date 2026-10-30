@@ -9,7 +9,7 @@
 #include "user/user.h"
 #include "kernel/fcntl.h"
 
-char *argv[] = {"sh", 0};
+char *argv[] = {"login", 0};
 
 int
 main(void)
@@ -24,15 +24,15 @@ main(void)
   dup(0); // stderr
 
   for (;;) {
-    printf("init: starting sh\n");
+    consoleset(0, 1);
     pid = fork();
     if (pid < 0) {
       printf("init: fork failed\n");
       exit(1);
     }
     if (pid == 0) {
-      exec("sh", argv);
-      printf("init: exec sh failed\n");
+      exec("/login", argv);
+      printf("init: exec login failed\n");
       exit(1);
     }
 

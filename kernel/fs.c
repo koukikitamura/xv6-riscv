@@ -237,6 +237,9 @@ iupdate(struct inode *ip)
   dip->minor = ip->minor;
   dip->nlink = ip->nlink;
   dip->size = ip->size;
+  dip->uid = ip->uid;
+  dip->gid = ip->gid;
+  dip->mode = ip->mode;
   memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
   log_write(bp);
   brelse(bp);
@@ -310,6 +313,9 @@ ilock(struct inode *ip)
     ip->minor = dip->minor;
     ip->nlink = dip->nlink;
     ip->size = dip->size;
+    ip->uid = dip->uid;
+    ip->gid = dip->gid;
+    ip->mode = dip->mode;
     memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
     brelse(bp);
     ip->valid = 1;
@@ -486,6 +492,9 @@ stati(struct inode *ip, struct stat *st)
   st->type = ip->type;
   st->nlink = ip->nlink;
   st->size = ip->size;
+  st->uid = ip->uid;
+  st->gid = ip->gid;
+  st->mode = ip->mode;
 }
 
 // Read data from inode.
@@ -686,7 +695,7 @@ namex(char *path, int nameiparent, char *name)
 
   while ((path = skipelem(path, name)) != 0) {
     ilock(ip);
-    if (ip->type != T_DIR) {
+    if (ip->type != T_DIR || !iaccess(ip, MAY_EXEC)) {
       iunlockput(ip);
       return 0;
     }
@@ -720,4 +729,30 @@ struct inode *
 nameiparent(char *path, char *name)
 {
   return namex(path, 1, name);
+}
+
+// Caller holds ip->lock. Select exactly one of owner, group, or other.
+int
+iaccess(struct inode *ip, int requested)
+{
+  struct proc *p = myproc();
+  int permissions;
+
+  if (p->uid == 0) {
+    // Even root cannot execute an ordinary file with no execute bits.
+    if ((requested & MAY_EXEC) && ip->type != T_DIR && !(ip->mode & 0111))
+      return 0;
+    return 1;
+  }
+
+  // Select one class. A failed owner/group check never falls back to other.
+  if (p->uid == ip->uid) {
+    permissions = (ip->mode >> 6) & 7;
+  } else if (p->gid == ip->gid) {
+    permissions = (ip->mode >> 3) & 7;
+  } else {
+    permissions = ip->mode & 7;
+  }
+
+  return (permissions & requested) == requested;
 }

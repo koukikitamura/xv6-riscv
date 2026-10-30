@@ -124,6 +124,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->uid = p->gid = 0;
 
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
@@ -274,6 +275,8 @@ kfork(void)
     return -1;
   }
   np->sz = p->sz;
+  np->uid = p->uid;
+  np->gid = p->gid;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -592,10 +595,18 @@ int
 kkill(int pid)
 {
   struct proc *p;
+  uint uid = myproc()->uid;
+
+  if (pid <= 1)
+    return -1;
 
   for (p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if (p->pid == pid) {
+      if (uid != 0 && uid != p->uid) {
+        release(&p->lock);
+        return -1;
+      }
       p->killed = 1;
       if (p->state == SLEEPING) {
         // Wake process from sleep().

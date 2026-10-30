@@ -8,7 +8,7 @@
 # ./test-xv6.py crash  (runs the crash tests)
 # ./test-xv6.py log (runs the log crash test)
 
-import argparse, os, inspect, re, signal, subprocess, sys, time
+import argparse, os, inspect, re, select, signal, socket, struct, subprocess, sys, tempfile, time
 from subprocess import run
 
 parser = argparse.ArgumentParser()
@@ -22,13 +22,20 @@ class QEMU(object):
         if reset:
             self.build_xv6()
             self.reset_fs()
-        q = ["make", "qemu"]
+        self.tmp = tempfile.TemporaryDirectory(prefix="xv6-monitor-", dir="/tmp")
+        self.monitor_path = self.tmp.name + "/monitor"
+        q = ["make", "qemu", "QEMUEXTRA=-monitor unix:" + self.monitor_path +
+             ",server=on,wait=off"]
         self.proc = subprocess.Popen(q, stdin=subprocess.PIPE,
                                       stdout=subprocess.PIPE,
-                                      stderr=subprocess.STDOUT)
+                                      stderr=subprocess.STDOUT, start_new_session=True)
         self.output = ""
         self.outbytes = bytearray()       
-        time.sleep(1)
+        self.monitor(r'^login: ', timeout=30)
+        self.cmd("root\n")
+        self.monitor(r'^Password: ', timeout=30)
+        self.cmd("root\n")
+        self.monitor(r'^\$ ', timeout=30)
 
     def reset_fs(self):
         try:
@@ -46,7 +53,7 @@ class QEMU(object):
     def save_output(self):
       try:
         with open("test-xv6.out", "w") as f:
-            f.write(self.out)
+            f.write(self.output)
             f.close()
       except OSError as e:
         print("Provided a bad results path. Error:", e)     
@@ -58,19 +65,29 @@ class QEMU(object):
         self.proc.stdin.flush()
         
     def crash(self):
-        ps = run(['ps', '-opid', '--no-headers', '--ppid', str(self.proc.pid)], stdout=subprocess.PIPE, encoding='utf8')
-        kids = [int(line) for line in ps.stdout.splitlines()]
-        if len(kids) == 0:
-            print("no qemu")
-            os.exit(1)
-        print("kill", kids[0])
-        os.kill(kids[0], signal.SIGKILL)
+        # Kill make and QEMU together on Linux and macOS.
+        os.killpg(self.proc.pid, signal.SIGKILL)
+        self.proc.wait()
+        self.tmp.cleanup()
 
     def stop(self):
-        self.proc.terminate()
+        if self.proc.poll() is not None:
+            return
+        self.cmd("\x01x")
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(self.proc.pid, signal.SIGKILL)
+            self.proc.wait()
+        self.tmp.cleanup()
 
     def read(self):
+        ready, _, _ = select.select([self.proc.stdout], [], [], 1)
+        if not ready:
+            return
         buf = os.read(self.proc.stdout.fileno(), 4096)
+        if not buf:
+            self.error()
         self.outbytes.extend(buf)
         self.output = self.outbytes.decode("utf-8", "replace")
 
@@ -78,7 +95,7 @@ class QEMU(object):
         return self.output.splitlines()
 
     def error(self):
-        print("FAIL: match failed", regexps)
+        print("FAIL: QEMU stopped or expected output was not found")
         self.save_output()
         self.stop()
         sys.exit(1)
@@ -114,10 +131,39 @@ class QEMU(object):
 
 def crash_log():
     q = QEMU(True)
-    q.cmd("logstress f0 f1 f2 f3 f4 f5\n")
-    time.sleep(2)
-    q.crash()
-    q.stop()
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as monitor:
+            monitor.settimeout(5)
+            monitor.connect(q.monitor_path)
+            def prompt():
+                data = b""
+                while b"(qemu)" not in data:
+                    block = monitor.recv(4096)
+                    if not block:
+                        raise RuntimeError("QEMU monitor disconnected")
+                    data += block
+            def command(text):
+                monitor.sendall(text.encode() + b"\n")
+                prompt()
+            prompt()
+            q.cmd("logstress f0 f1 f2 f3 f4 f5\n")
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                time.sleep(0.005)
+                command("stop")
+                # Check a quiescent image, not a race with a clearing log header.
+                with open("fs.img", "rb", buffering=0) as disk:
+                    disk.seek(1024 + 20)  # superblock.logstart
+                    start, = struct.unpack("<I", disk.read(4))
+                    disk.seek(start * 1024)
+                    count, = struct.unpack("<I", disk.read(4))
+                if count:
+                    q.crash()
+                    return
+                command("cont")
+            raise RuntimeError("no committed log transaction observed")
+    finally:
+        q.stop()
 
 def recover_log():
     q = QEMU()
@@ -128,7 +174,7 @@ def recover_log():
         q.cmd("ls\n")
         time.sleep(2)
         q.read()
-        q.match('f5')
+        q.match(r'^-.*\bf5$')
     q.stop()
     return ok
 

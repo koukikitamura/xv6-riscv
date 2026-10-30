@@ -3,25 +3,42 @@
 #include "user/user.h"
 #include "kernel/fs.h"
 #include "kernel/fcntl.h"
+#include "user/accounts.h"
 
-char *
-fmtname(char *path)
+static void
+show(char *path, struct stat *st)
 {
-  static char buf[DIRSIZ + 1];
-  char *p;
+  char mode[11] = "----------";
+  char *bits = "rwx";
+  struct account owner;
+  struct group group;
 
-  // Find first character after last slash.
-  for (p = path + strlen(path); p >= path && *p != '/'; p--)
-    ;
-  p++;
+  if (st->type == T_DIR)
+    mode[0] = 'd';
+  else if (st->type == T_DEVICE)
+    mode[0] = 'c';
 
-  // Return blank-padded name.
-  if (strlen(p) >= DIRSIZ)
-    return p;
-  memmove(buf, p, strlen(p));
-  memset(buf + strlen(p), ' ', DIRSIZ - strlen(p));
-  buf[sizeof(buf) - 1] = '\0';
-  return buf;
+  for (int i = 0; i < 9; i++)
+    if (st->mode & (1 << (8 - i)))
+      mode[i + 1] = bits[i % 3];
+
+  printf("%s ", mode);
+
+  if (account_uid(st->uid, &owner) == 0)
+    printf("%s ", owner.name);
+  else
+    printf("%d ", st->uid);
+
+  if (group_gid(st->gid, &group) == 0)
+    printf("%s ", group.name);
+  else
+    printf("%d ", st->gid);
+
+  char *name = path;
+  for (char *p = path; *p; p++)
+    if (*p == '/' && p[1])
+      name = p + 1;
+  printf("%s\n", name);
 }
 
 void
@@ -32,21 +49,23 @@ ls(char *path)
   struct dirent de;
   struct stat st;
 
-  if ((fd = open(path, O_RDONLY)) < 0) {
-    fprintf(2, "ls: cannot open %s\n", path);
+  if (stat(path, &st) < 0) {
+    fprintf(2, "ls: cannot stat %s\n", path);
     return;
   }
-
-  if (fstat(fd, &st) < 0) {
-    fprintf(2, "ls: cannot stat %s\n", path);
-    close(fd);
+  if (st.type != T_DIR) {
+    show(path, &st);
+    return;
+  }
+  if ((fd = open(path, O_RDONLY)) < 0) {
+    fprintf(2, "ls: cannot open %s\n", path);
     return;
   }
 
   switch (st.type) {
   case T_DEVICE:
   case T_FILE:
-    printf("%s %d %d %d\n", fmtname(path), st.type, st.ino, (int)st.size);
+    show(path, &st);
     break;
 
   case T_DIR:
@@ -66,7 +85,7 @@ ls(char *path)
         printf("ls: cannot stat %s\n", buf);
         continue;
       }
-      printf("%s %d %d %d\n", fmtname(buf), st.type, st.ino, (int)st.size);
+      show(buf, &st);
     }
     break;
   }

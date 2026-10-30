@@ -88,7 +88,7 @@ int
 filestat(struct file *f, uint64 addr)
 {
   struct proc *p = myproc();
-  struct stat st;
+  struct stat st = {0};
 
   if (f->type == FD_INODE || f->type == FD_DEVICE) {
     ilock(f->ip);

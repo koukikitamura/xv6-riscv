@@ -7,5 +7,13 @@ struct stat {
   uint ino;    // Inode number
   short type;  // Type of file
   short nlink; // Number of links to file
+  uint uid;
+  uint gid;
+  uint mode;
   uint64 size; // Size of file in bytes
 };
+
+#define MAY_EXEC  1
+#define MAY_WRITE 2
+#define MAY_READ  4
+#define MAX_ID    65535

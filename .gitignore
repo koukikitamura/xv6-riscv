@@ -10,3 +10,6 @@ _*
 /user/usys.S
 .gdbinit
 TAGS
+
+lab/
+test-xv6.out

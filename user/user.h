@@ -48,3 +48,10 @@ void printf(const char *, ...) __attribute__((format(printf, 1, 2)));
 // umalloc.c
 void *malloc(uint);
 void free(void *);
+
+int getuid(void);
+int getgid(void);
+int setidentity(int, int);
+int chmod(const char *, int);
+int chown(const char *, int, int);
+int consoleset(int, int);

@@ -107,3 +107,56 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_getuid(void)
+{
+  return myproc()->uid;
+}
+
+uint64
+sys_getgid(void)
+{
+  return myproc()->gid;
+}
+
+// No saved IDs or setuid executables: dropping root is irreversible.
+uint64
+sys_setidentity(void)
+{
+  int uid, gid;
+  struct proc *p = myproc();
+
+  argint(0, &uid);
+  argint(1, &gid);
+
+  if (p->uid != 0)
+    return -1;
+  if (uid < 0 || uid > 65535 || gid < 0 || gid > 65535)
+    return -1;
+
+  acquire(&p->lock);
+  p->uid = uid;
+  p->gid = gid;
+  release(&p->lock);
+
+  return 0;
+}
+
+uint64
+sys_consoleset(void)
+{
+  int uid, echo;
+
+  argint(0, &uid);
+  argint(1, &echo);
+
+  if (myproc()->uid != 0)
+    return -1;
+  if (uid < 0 || uid > 65535)
+    return -1;
+  if (echo != 0 && echo != 1)
+    return -1;
+
+  return consoleset(uid, echo);
+}

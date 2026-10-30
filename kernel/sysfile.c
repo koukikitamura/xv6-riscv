@@ -136,7 +136,7 @@ sys_link(void)
   }
 
   ilock(ip);
-  if (ip->type == T_DIR) {
+  if (ip->type == T_DIR || (myproc()->uid != 0 && myproc()->uid != ip->uid)) {
     iunlockput(ip);
     end_op();
     return -1;
@@ -149,7 +149,8 @@ sys_link(void)
   if ((dp = nameiparent(new, name)) == 0)
     goto bad;
   ilock(dp);
-  if (dp->dev != ip->dev || dirlink(dp, name, ip->inum) < 0) {
+  if (!iaccess(dp, MAY_WRITE | MAY_EXEC) || dp->dev != ip->dev ||
+      dirlink(dp, name, ip->inum) < 0) {
     iunlockput(dp);
     goto bad;
   }
@@ -203,6 +204,9 @@ sys_unlink(void)
   }
 
   ilock(dp);
+
+  if (!iaccess(dp, MAY_WRITE | MAY_EXEC))
+    goto bad;
 
   // Cannot unlink "." or "..".
   if (namecmp(name, ".") == 0 || namecmp(name, "..") == 0)
@@ -262,6 +266,11 @@ create(char *path, short type, short major, short minor)
     return 0;
   }
 
+  if (!iaccess(dp, MAY_WRITE | MAY_EXEC)) {
+    iunlockput(dp);
+    return 0;
+  }
+
   if ((ip = ialloc(dp->dev, type)) == 0) {
     iunlockput(dp);
     return 0;
@@ -271,6 +280,16 @@ create(char *path, short type, short major, short minor)
   ip->major = major;
   ip->minor = minor;
   ip->nlink = 1;
+  ip->uid = myproc()->uid;
+  ip->gid = myproc()->gid;
+
+  if (type == T_DIR)
+    ip->mode = 0755;
+  else if (type == T_DEVICE)
+    ip->mode = 0600;
+  else
+    ip->mode = 0644;
+
   iupdate(ip);
 
   if (type == T_DIR) { // Create . and .. entries.
@@ -311,6 +330,15 @@ sys_open(void)
   int n;
 
   argint(1, &omode);
+  if (omode & ~(O_WRONLY | O_RDWR | O_CREATE | O_TRUNC))
+    return -1;
+
+  int access_mode = omode & (O_WRONLY | O_RDWR);
+  if (access_mode == (O_WRONLY | O_RDWR))
+    return -1;
+  if ((omode & O_TRUNC) && access_mode == O_RDONLY)
+    return -1;
+
   if ((n = argstr(0, path, MAXPATH)) < 0)
     return -1;
 
@@ -333,6 +361,20 @@ sys_open(void)
       end_op();
       return -1;
     }
+  }
+
+  int requested;
+  if (access_mode == O_WRONLY)
+    requested = MAY_WRITE;
+  else if (access_mode == O_RDWR)
+    requested = MAY_READ | MAY_WRITE;
+  else
+    requested = MAY_READ;
+
+  if ((ip->type == T_DIR && omode != O_RDONLY) || !iaccess(ip, requested)) {
+    iunlockput(ip);
+    end_op();
+    return -1;
   }
 
   if (ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)) {
@@ -393,6 +435,8 @@ sys_mknod(void)
   char path[MAXPATH];
   int major, minor;
 
+  if (myproc()->uid != 0)
+    return -1;
   begin_op();
   argint(1, &major);
   argint(2, &minor);
@@ -419,7 +463,7 @@ sys_chdir(void)
     return -1;
   }
   ilock(ip);
-  if (ip->type != T_DIR) {
+  if (ip->type != T_DIR || !iaccess(ip, MAY_EXEC)) {
     iunlockput(ip);
     end_op();
     return -1;
@@ -502,5 +546,98 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+// Metadata lookup does not require read permission on the file itself.
+uint64
+sys_stat(void)
+{
+  char path[MAXPATH];
+  uint64 dst;
+  struct stat st = {0};
+  struct inode *ip;
+
+  argaddr(1, &dst);
+  if (argstr(0, path, sizeof(path)) < 0)
+    return -1;
+
+  begin_op();
+  if ((ip = namei(path)) == 0) {
+    end_op();
+    return -1;
+  }
+
+  ilock(ip);
+  stati(ip, &st);
+  iunlockput(ip);
+  end_op();
+
+  return copyout(myproc()->pagetable, dst, (char *)&st, sizeof(st));
+}
+
+uint64
+sys_chmod(void)
+{
+  char path[MAXPATH];
+  int mode;
+  struct inode *ip;
+
+  argint(1, &mode);
+  if (mode < 0 || (mode & ~0777))
+    return -1;
+  if (argstr(0, path, sizeof(path)) < 0)
+    return -1;
+
+  begin_op();
+  if ((ip = namei(path)) == 0) {
+    end_op();
+    return -1;
+  }
+
+  ilock(ip);
+  int permitted = myproc()->uid == 0 || myproc()->uid == ip->uid;
+  if (permitted) {
+    ip->mode = mode;
+    iupdate(ip);
+  }
+  iunlockput(ip);
+  end_op();
+
+  if (!permitted)
+    return -1;
+  return 0;
+}
+
+uint64
+sys_chown(void)
+{
+  char path[MAXPATH];
+  int uid, gid;
+  struct inode *ip;
+
+  argint(1, &uid);
+  argint(2, &gid);
+
+  if (myproc()->uid != 0)
+    return -1;
+  if (uid < 0 || uid > MAX_ID || gid < 0 || gid > MAX_ID)
+    return -1;
+  if (argstr(0, path, sizeof(path)) < 0)
+    return -1;
+
+  begin_op();
+  if ((ip = namei(path)) == 0) {
+    end_op();
+    return -1;
+  }
+
+  ilock(ip);
+  ip->uid = uid;
+  ip->gid = gid;
+  iupdate(ip);
+  iunlockput(ip);
+  end_op();
+
   return 0;
 }

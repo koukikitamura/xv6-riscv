@@ -76,7 +76,15 @@ runcmd(struct cmd *cmd)
     ecmd = (struct execcmd *)cmd;
     if (ecmd->argv[0] == 0)
       exit(1);
-    exec(ecmd->argv[0], ecmd->argv);
+    // Bare command names select root-owned programs. Use ./ for local files.
+    if (strchr(ecmd->argv[0], '/') == 0 && strlen(ecmd->argv[0]) < 100) {
+      char path[102];
+      path[0] = '/';
+      strcpy(path + 1, ecmd->argv[0]);
+      exec(path, ecmd->argv);
+    } else {
+      exec(ecmd->argv[0], ecmd->argv);
+    }
     fprintf(2, "exec %s failed\n", ecmd->argv[0]);
     break;
 

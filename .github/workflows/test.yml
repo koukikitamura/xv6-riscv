@@ -8,6 +8,8 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y gcc-riscv64-linux-gnu qemu-system-riscv clang-format bc
       - run: make fmt && git diff --exit-code
       - run: make kernel/kernel fs.img
+      - run: python3 tools/test_password.py
+      - run: python3 tools/test_security.py --skip-usertests
       - run: ./test-xv6.py usertests
       - run: ./test-xv6.py crash
 

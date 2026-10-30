@@ -11,7 +11,10 @@
 // mkfs computes the super block and builds an initial file system. The
 // super block describes the disk layout:
 struct superblock {
-  uint magic;      // Must be FSMAGIC
+  uint magic; // Must be FSMAGIC
+  uint uid;
+  uint gid;
+  uint mode;
   uint size;       // Size of file system image (blocks)
   uint nblocks;    // Number of data blocks
   uint ninodes;    // Number of inodes.
@@ -21,7 +24,7 @@ struct superblock {
   uint bmapstart;  // Block number of first free map block
 };
 
-#define FSMAGIC 0x10203040
+#define FSMAGIC 0x10203041
 
 #define NDIRECT   12
 #define NINDIRECT (BSIZE / sizeof(uint))
@@ -29,11 +32,15 @@ struct superblock {
 
 // On-disk inode structure
 struct dinode {
-  short type;              // File type
-  short major;             // Major device number (T_DEVICE only)
-  short minor;             // Minor device number (T_DEVICE only)
-  short nlink;             // Number of links to inode in file system
+  short type;  // File type
+  short major; // Major device number (T_DEVICE only)
+  short minor; // Minor device number (T_DEVICE only)
+  short nlink; // Number of links to inode in file system
+  uint uid;
+  uint gid;
+  uint mode;
   uint size;               // Size of file (bytes)
+  uint padding[13];        // Keep dinode 128 bytes: eight inodes per block.
   uint addrs[NDIRECT + 1]; // Data block addresses
 };
 

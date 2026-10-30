@@ -6,6 +6,10 @@
 #include "proc.h"
 #include "defs.h"
 #include "elf.h"
+#include "stat.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
 
 static int loadseg(pde_t *, uint64, struct inode *, uint, uint);
 
@@ -44,6 +48,9 @@ kexec(char *path, char **argv)
     return -1;
   }
   ilock(ip);
+
+  if (ip->type != T_FILE || !iaccess(ip, MAY_EXEC))
+    goto bad;
 
   // Read the ELF header.
   if (readi(ip, 0, (uint64)&elf, 0, sizeof(elf)) != sizeof(elf))

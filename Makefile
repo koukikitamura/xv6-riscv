@@ -126,6 +126,9 @@ mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
 .PRECIOUS: %.o
 
 UPROGS=\
+	$U/_container\
+	$U/_ps\
+	$U/_containertests\
 	$U/_cat\
 	$U/_echo\
 	$U/_forktest\
@@ -147,15 +150,19 @@ UPROGS=\
 	$U/_dorphan\
 	$U/_sync\
 
-fs.img: mkfs/mkfs README $(UPROGS)
-	mkfs/mkfs fs.img README $(UPROGS)
+IMAGEPROGS = $(addprefix $U/_,sh cat echo grep kill ln ls mkdir rm wc ps)
+xv6-shell: tools/mkcontainer.py $(IMAGEPROGS)
+	python3 tools/mkcontainer.py $@ $(OBJCOPY) $(IMAGEPROGS)
+
+fs.img: mkfs/mkfs README $(UPROGS) xv6-shell
+	mkfs/mkfs fs.img README $(UPROGS) xv6-shell
 
 -include kernel/*.d user/*.d
 
 clean: 
 	rm -f *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
 	*/*.o */*.d */*.asm */*.sym \
-	$K/kernel fs.img \
+	$K/kernel fs.img xv6-shell \
 	mkfs/mkfs .gdbinit \
         $U/usys.S \
 	$(UPROGS)

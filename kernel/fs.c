@@ -678,9 +678,11 @@ static struct inode *
 namex(char *path, int nameiparent, char *name)
 {
   struct inode *ip, *next;
+  struct proc *p = myproc();
+  struct inode *root = p ? p->root : 0;
 
   if (*path == '/')
-    ip = iget(ROOTDEV, ROOTINO);
+    ip = root ? idup(root) : iget(ROOTDEV, ROOTINO);
   else
     ip = idup(myproc()->cwd);
 
@@ -694,6 +696,10 @@ namex(char *path, int nameiparent, char *name)
       // Stop one level early.
       iunlock(ip);
       return ip;
+    }
+    if (ip == root && namecmp(name, "..") == 0) {
+      iunlock(ip);
+      continue;
     }
     if ((next = dirlookup(ip, name, 0)) == 0) {
       iunlockput(ip);

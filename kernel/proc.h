@@ -100,5 +100,8 @@ struct proc {
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
-  char name[16];               // Process name (debugging)
+  struct container *container; // immutable membership until reaped
+  struct inode *root;          // private filesystem root, or null on the host
+  uint64 memcharge; // reserved user bytes, including an exec in progress
+  char name[16];    // Process name (debugging)
 };

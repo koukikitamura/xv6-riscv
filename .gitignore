@@ -10,3 +10,8 @@ _*
 /user/usys.S
 .gdbinit
 TAGS
+
+/xv6-shell
+/lab/*.log
+
+__pycache__/

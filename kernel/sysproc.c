@@ -6,6 +6,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
+#include "container.h"
 
 uint64
 sys_exit(void)
@@ -59,6 +60,8 @@ sys_sbrk(void)
       return -1;
     if (addr + n > TRAPFRAME)
       return -1;
+    if (containercharge(myproc(), PGROUNDUP(addr + n) - PGROUNDUP(addr)) < 0)
+      return -1;
     myproc()->sz += n;
   }
   return addr;
@@ -106,4 +109,14 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_getprocs(void)
+{
+  uint64 addr;
+  int capacity;
+  argaddr(0, &addr);
+  argint(1, &capacity);
+  return getprocs(addr, capacity);
 }

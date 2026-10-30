@@ -29,6 +29,7 @@ kexec(char *path, char **argv)
 {
   char *s, *last;
   int i, off;
+  uint64 reserved = 0;
   uint64 argc, sz = 0, sp, ustack[MAXARG], stackbase;
   struct elfhdr elf;
   struct inode *ip;
@@ -68,6 +69,14 @@ kexec(char *path, char **argv)
       goto bad;
     if (ph.vaddr % PGSIZE != 0)
       goto bad;
+    if (ph.vaddr + ph.memsz >= TRAPFRAME)
+      goto bad;
+    uint64 target = PGROUNDUP(ph.vaddr + ph.memsz);
+    if (target > reserved) {
+      if (containercharge(p, target - reserved) < 0)
+        goto bad;
+      reserved = target;
+    }
     uint64 sz1;
     if ((sz1 = uvmalloc(pagetable, sz, ph.vaddr + ph.memsz,
                         flags2perm(ph.flags))) == 0)
@@ -88,6 +97,10 @@ kexec(char *path, char **argv)
   // Use the rest as the user stack.
   sz = PGROUNDUP(sz);
   uint64 sz1;
+  uint64 target = sz + (USERSTACK + 1) * PGSIZE;
+  if (target >= TRAPFRAME || containercharge(p, target - reserved) < 0)
+    goto bad;
+  reserved = target;
   if ((sz1 = uvmalloc(pagetable, sz, sz + (USERSTACK + 1) * PGSIZE, PTE_W)) ==
       0)
     goto bad;
@@ -128,7 +141,9 @@ kexec(char *path, char **argv)
   for (last = s = path; *s; s++)
     if (*s == '/')
       last = s + 1;
+  acquire(&p->lock);
   safestrcpy(p->name, last, sizeof(p->name));
+  release(&p->lock);
 
   // Commit to the user image.
   oldpagetable = p->pagetable;
@@ -137,12 +152,14 @@ kexec(char *path, char **argv)
   p->trapframe->epc = elf.entry; // initial program counter = ulib.c:start()
   p->trapframe->sp = sp;         // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
+  containercharge(p, -(int64)PGROUNDUP(oldsz));
 
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 
 bad:
   if (pagetable)
     proc_freepagetable(pagetable, sz);
+  containercharge(p, -(int64)reserved);
   if (ip) {
     iunlockput(ip);
     end_op();

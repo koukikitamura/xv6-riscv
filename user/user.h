@@ -48,3 +48,8 @@ void printf(const char *, ...) __attribute__((format(printf, 1, 2)));
 // umalloc.c
 void *malloc(uint);
 void free(void *);
+
+struct container_limits;
+struct procinfo;
+int containerenter(const char *, const struct container_limits *);
+int getprocs(struct procinfo *, int);

@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "container.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -335,7 +336,8 @@ sys_open(void)
     }
   }
 
-  if (ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)) {
+  if (ip->type == T_DEVICE &&
+      (myproc()->container || ip->major < 0 || ip->major >= NDEV)) {
     iunlockput(ip);
     end_op();
     return -1;
@@ -389,6 +391,8 @@ sys_mkdir(void)
 uint64
 sys_mknod(void)
 {
+  if (myproc()->container)
+    return -1;
   struct inode *ip;
   char path[MAXPATH];
   int major, minor;
@@ -503,4 +507,58 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64
+sys_containerenter(void)
+{
+  char path[MAXPATH];
+  uint64 addr;
+  struct container_limits limits;
+  struct proc *p = myproc();
+  struct inode *root;
+
+  argaddr(1, &addr);
+  if (p->container || argstr(0, path, MAXPATH) < 0 ||
+      copyin(p->pagetable, (char *)&limits, addr, sizeof(limits)) < 0)
+    return -1;
+
+  begin_op();
+  root = namei(path);
+  if (!root) {
+    end_op();
+    return -1;
+  }
+
+  ilock(root);
+  if (root->type != T_DIR) {
+    iunlockput(root);
+    end_op();
+    return -1;
+  }
+  iunlock(root);
+
+  int id = containerattach(&limits);
+  if (id < 0) {
+    iput(root);
+    end_op();
+    return -1;
+  }
+
+  iput(p->cwd);
+  p->cwd = idup(root);
+  p->root = root;
+  end_op();
+
+  // Preserve only console descriptors 0..2. Pipes and ordinary files could
+  // otherwise give a container access to resources outside its root.
+  for (int fd = 0; fd < NOFILE; fd++) {
+    struct file *f = p->ofile[fd];
+    if (f && !(fd < 3 && f->type == FD_DEVICE && f->major == CONSOLE)) {
+      p->ofile[fd] = 0;
+      fileclose(f);
+    }
+  }
+
+  return id;
 }

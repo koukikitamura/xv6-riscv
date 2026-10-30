@@ -183,3 +183,9 @@ void            virtio_disk_intr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x) / sizeof((x)[0]))
+
+// container support in proc.c
+struct container_limits;
+int containercharge(struct proc *, int64);
+int containerattach(struct container_limits *);
+int getprocs(uint64, int);

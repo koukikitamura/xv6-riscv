@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "container.h"
 
 struct cpu cpus[NCPU];
 
@@ -25,6 +26,210 @@ extern char trampoline[]; // trampoline.S
 // memory model when using p->parent.
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
+
+// Lock order: wait_lock -> proc.lock -> containers_lock. Never acquire a
+// process lock or sleep while holding containers_lock.
+struct container {
+  int id;
+  int nproc;
+  int stopping;
+  struct container_limits limits;
+  uint64 memory;
+  uint64 period;
+  uint64 used;
+  uint64 runtime;
+};
+
+static struct container containers[NPROC];
+static struct spinlock containers_lock;
+
+// Reserve before allocating so concurrent fork/sbrk/exec cannot exceed limits.
+int
+containercharge(struct proc *p, int64 delta)
+{
+  struct container *c = p->container;
+
+  if (!c)
+    return 0;
+
+  acquire(&containers_lock);
+  if (delta > 0 && (uint64)delta > c->limits.memory - c->memory) {
+    release(&containers_lock);
+    return -1;
+  }
+
+  c->memory += delta;
+  p->memcharge += delta;
+  release(&containers_lock);
+  return 0;
+}
+
+static int
+containerfork(struct proc *p, struct proc *np)
+{
+  struct container *c = p->container;
+
+  if (!c)
+    return 0;
+
+  uint64 size = PGROUNDUP(p->sz);
+  acquire(&containers_lock);
+  if (c->stopping || c->nproc >= c->limits.maxprocs ||
+      size > c->limits.memory - c->memory) {
+    release(&containers_lock);
+    return -1;
+  }
+
+  c->nproc++;
+  c->memory += size;
+  np->container = c;
+  np->memcharge = size;
+  release(&containers_lock);
+  return 0;
+}
+
+// Called with p->lock held, after its memory has actually been freed.
+static void
+containerfree(struct proc *p)
+{
+  struct container *c = p->container;
+
+  if (!c)
+    return;
+
+  acquire(&containers_lock);
+  c->memory -= p->memcharge;
+  c->nproc--;
+  p->container = 0;
+  p->memcharge = 0;
+  release(&containers_lock);
+}
+
+// A killed process must be allowed to run to release resources.
+static int
+containerready(struct proc *p)
+{
+  struct container *c = p->container;
+
+  if (!c || p->killed)
+    return 1;
+
+  acquire(&containers_lock);
+  uint64 now = r_time();
+  if (now - c->period >= CONTAINER_PERIOD) {
+    c->period = now;
+    c->used = 0;
+  }
+
+  int ready = c->used < (uint64)c->limits.cpus * CONTAINER_PERIOD;
+  release(&containers_lock);
+  return ready;
+}
+
+static void
+containertime(struct proc *p, uint64 start)
+{
+  struct container *c = p->container;
+
+  if (!c)
+    return;
+
+  uint64 now = r_time();
+  acquire(&containers_lock);
+  // Scheduling intervals crossing a period boundary are charged to the
+  // current period. Enforcement can overshoot by an in-flight timer slice
+  // per hart, but blocked time is never charged.
+  c->used += now - start;
+  c->runtime += now - start;
+  release(&containers_lock);
+}
+
+// The caller has validated the root inode; membership cannot be changed.
+int
+containerattach(struct container_limits *limits)
+{
+  struct proc *p = myproc();
+
+  if (limits->memory < PGROUNDUP(p->sz) ||
+      limits->memory > PHYSTOP - KERNBASE || limits->maxprocs < 1 ||
+      limits->maxprocs > NPROC || limits->cpus < 1 || limits->cpus > NCPU)
+    return -1;
+
+  acquire(&wait_lock);
+  // A pre-existing child must not retain the caller's old environment.
+  for (struct proc *q = proc; q < &proc[NPROC]; q++) {
+    if (q->parent == p) {
+      release(&wait_lock);
+      return -1;
+    }
+  }
+
+  acquire(&p->lock);
+  acquire(&containers_lock);
+  int id = -1;
+  if (!p->container) {
+    for (struct container *c = containers; c < &containers[NPROC]; c++) {
+      if (c->nproc == 0) {
+        memset(c, 0, sizeof(*c));
+        c->id = p->pid;
+        c->nproc = 1;
+        c->limits = *limits;
+        c->memory = PGROUNDUP(p->sz);
+        c->period = r_time();
+
+        p->container = c;
+        p->memcharge = c->memory;
+        id = c->id;
+        break;
+      }
+    }
+  }
+
+  release(&containers_lock);
+  release(&p->lock);
+  release(&wait_lock);
+  return id;
+}
+
+int
+getprocs(uint64 addr, int capacity)
+{
+  struct proc *self = myproc();
+  int n = 0;
+
+  if (capacity < 0 || capacity > NPROC)
+    return -1;
+
+  for (struct proc *p = proc; p < &proc[NPROC] && n < capacity; p++) {
+    struct procinfo info;
+    memset(&info, 0, sizeof(info));
+
+    acquire(&p->lock);
+    if (p->state == UNUSED || p->state == USED ||
+        (self->container && self->container != p->container)) {
+      release(&p->lock);
+      continue;
+    }
+
+    info.pid = p->pid;
+    info.state = p->state;
+    safestrcpy(info.name, p->name, sizeof(info.name));
+    if (p->container) {
+      acquire(&containers_lock);
+      info.container = p->container->id;
+      info.runtime = p->container->runtime;
+      release(&containers_lock);
+    }
+    release(&p->lock);
+
+    if (copyout(self->pagetable, addr + n * sizeof(info), (char *)&info,
+                sizeof(info)) < 0)
+      return -1;
+    n++;
+  }
+
+  return n;
+}
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -49,6 +254,7 @@ procinit(void)
 {
   struct proc *p;
 
+  initlock(&containers_lock, "containers");
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
   for (p = proc; p < &proc[NPROC]; p++) {
@@ -161,6 +367,7 @@ freeproc(struct proc *p)
   if (p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+  containerfree(p);
   p->sz = 0;
   p->pid = 0;
   p->name[0] = 0;
@@ -239,15 +446,24 @@ growproc(int n)
   struct proc *p = myproc();
 
   sz = p->sz;
+  // Preserve the original no-op for a shrink that would wrap below zero.
+  if (n < 0 && (uint64)(-(int64)n) > sz)
+    return 0;
+  int64 charge = (int64)PGROUNDUP(sz + n) - (int64)PGROUNDUP(sz);
+  if (n > 0 && containercharge(p, charge) < 0)
+    return -1;
   if (n > 0) {
     if (sz + n > TRAPFRAME) {
+      containercharge(p, -charge);
       return -1;
     }
     if ((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
+      containercharge(p, -charge);
       return -1;
     }
   } else if (n < 0) {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    containercharge(p, charge);
   }
   p->sz = sz;
   return 0;
@@ -264,6 +480,12 @@ kfork(void)
 
   // Allocate process.
   if ((np = allocproc()) == 0) {
+    return -1;
+  }
+
+  if (containerfork(p, np) < 0) {
+    freeproc(np);
+    release(&np->lock);
     return -1;
   }
 
@@ -286,6 +508,8 @@ kfork(void)
     if (p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
+  if (p->root)
+    np->root = idup(p->root);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
@@ -330,6 +554,26 @@ kexit(int status)
   if (p == initproc)
     panic("init exiting");
 
+  // The first process owns the lifetime of the container. Stop descendants
+  // before reparenting, and prevent racing forks from adding new members.
+  struct container *ct = p->container;
+  if (ct && ct->id == p->pid) {
+    acquire(&containers_lock);
+    ct->stopping = 1;
+    release(&containers_lock);
+    for (struct proc *q = proc; q < &proc[NPROC]; q++) {
+      if (q == p)
+        continue;
+      acquire(&q->lock);
+      if (q->container == ct && q->state != UNUSED) {
+        q->killed = 1;
+        if (q->state == SLEEPING)
+          q->state = RUNNABLE;
+      }
+      release(&q->lock);
+    }
+  }
+
   // Close all open files.
   for (int fd = 0; fd < NOFILE; fd++) {
     if (p->ofile[fd]) {
@@ -341,6 +585,10 @@ kexit(int status)
 
   begin_op();
   iput(p->cwd);
+  if (p->root) {
+    iput(p->root);
+    p->root = 0;
+  }
   end_op();
   p->cwd = 0;
 
@@ -440,13 +688,15 @@ scheduler(void)
     int found = 0;
     for (p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
-      if (p->state == RUNNABLE) {
+      if (p->state == RUNNABLE && containerready(p)) {
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        uint64 start = r_time();
         swtch(&c->context, &p->context);
+        containertime(p, start);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
@@ -595,7 +845,8 @@ kkill(int pid)
 
   for (p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
-    if (p->pid == pid) {
+    if (p->pid == pid && p != initproc && p->state != UNUSED &&
+        (!myproc()->container || myproc()->container == p->container)) {
       p->killed = 1;
       if (p->state == SLEEPING) {
         // Wake process from sleep().
